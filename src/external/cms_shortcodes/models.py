@@ -80,6 +80,8 @@ class CmsPage(models.Model):
             parts.append(self.slug)
 
         return '/' + '/'.join(parts)
+    
+    full_url = property(get_full_url)
 
     @classmethod
     def get_homepage(cls):

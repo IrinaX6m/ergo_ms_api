@@ -229,7 +229,8 @@ class UserAuthorizationView(BaseAPIView):
                 examples={
                     "application/json": {
                         "refresh": "your_refresh_token",
-                        "access": "your_access_token"
+                        "access": "your_access_token",
+                        "user_id": 1  # Добавьте это в пример ответа
                     }
                 }
             ),
@@ -251,6 +252,7 @@ class UserAuthorizationView(BaseAPIView):
                     {
                         'refresh': str(refresh),
                         'access': str(refresh.access_token),
+                        'user_id': user.id  # Добавьте ID пользователя в ответ
                     },
                     status=status.HTTP_200_OK
                 )

@@ -4,6 +4,11 @@ from src.external.settings.serializers import CategorySerializer, TagSerializer
 from rest_framework import serializers
 from .models import CmsPage, CmsShortcodeCategory, CmsShortcodeTemplate, CmsShortcodeInstance
 
+class TagMiniSerializer(serializers.ModelSerializer):
+    class Meta:
+        model  = Tag
+        fields = ('id', 'name')
+
 class CmsCategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = CmsShortcodeCategory
@@ -64,9 +69,35 @@ class SiteLayoutSerializer(serializers.ModelSerializer):
     class Meta:
         model  = SiteLayout
         fields = ['id', 'header_template', 'footer_template', 'menu_pages']
+
+class PageCardSerializer(serializers.ModelSerializer):
+    """Мини-срез для карточек в сетке"""
+    preview_image = serializers.SerializerMethodField()
+    tags = TagMiniSerializer(many=True, read_only=True)
+
+    class Meta:
+        model  = CmsPage
+        fields = ['id', 'name', 'full_url', 'preview_image', 'tags']
+
+    # берём первое изображение на странице
+    def get_preview_image(self, page: CmsPage):
+        img_inst = (
+            page.instances
+                .filter(template__component_type__name='Image')
+                .order_by('position')
+                .first()
+        )
+        return (
+            img_inst.extra_data.get('src')
+            if img_inst and img_inst.extra_data
+            else None
+        )
 class PageSerializer(serializers.ModelSerializer):
     slug = serializers.SlugField(
         required=False, allow_null=True, allow_blank=True
+    )
+    creator = serializers.HiddenField(
+        default=serializers.CurrentUserDefault()
     )
     instances = InstanceSerializer(many=True, read_only=True)
     category = CategorySerializer(read_only=True)
@@ -84,7 +115,7 @@ class PageSerializer(serializers.ModelSerializer):
         model = CmsPage
         fields = [
             'id', 'name', 'slug', 'category', 'category_id','category_index',
-            'tags', 'tags_ids', 'is_homepage', 'instances', 'full_url',
+            'tags', 'tags_ids', 'is_homepage', 'instances', 'full_url', 'creator'
         ]    
 
     def validate(self, attrs):

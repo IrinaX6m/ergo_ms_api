@@ -1,5 +1,6 @@
 from uuid import uuid4
 from django.db import models
+from django.db.models import Count, Q
 from src.external.settings.models import Category
 from rest_framework import viewsets, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -7,10 +8,12 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from drf_yasg.utils import swagger_auto_schema
+from rest_framework import filters
+from django_filters.rest_framework import DjangoFilterBackend
 from drf_yasg import openapi
 from rest_framework import generics, permissions
 from .models import CmsPage, CmsShortcodeCategory, CmsShortcodeTemplate, CmsShortcodeInstance, SiteLayout
-from .serializers import CmsCategorySerializer, PageSerializer, SiteLayoutSerializer, TemplateSerializer, InstanceSerializer
+from .serializers import CmsCategorySerializer, PageCardSerializer, PageSerializer, SiteLayoutSerializer, TemplateSerializer, InstanceSerializer
 
 class ShortcodeCategoryViewSet(viewsets.ModelViewSet):
     queryset = CmsShortcodeCategory.objects.all()
@@ -34,29 +37,64 @@ class TemplateViewSet(viewsets.ModelViewSet):
         serializer.save(creator=self.request.user)
 
 class PageViewSet(viewsets.ModelViewSet):
-    queryset = CmsPage.objects.all()
+    queryset = (
+        CmsPage.objects
+        .all()
+        .select_related('category') # чтобы избежать N+1
+    )
     serializer_class = PageSerializer
-    lookup_field = 'slug'
+    lookup_field     = 'slug'
 
-    def get_permissions(self):
-        if self.action in ['list', 'retrieve']:
-            return [AllowAny()]
-        return [IsAuthenticated()]
+    # фильтры + сортировка
+    filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['category', 'tags']
+    ordering_fields  = ['date_of_creation', 'name']
+    ordering         = ['-date_of_creation']
 
-    def perform_create(self, serializer):
-        page = serializer.save(creator=self.request.user)
-        layout = SiteLayout.objects.first()
-        blocks = []
-        if layout and layout.header_template:
-            blocks.append(CmsShortcodeInstance(
-                page=page, template=layout.header_template, uid=uuid4().hex, position=0
-            ))
-        if layout and layout.footer_template:
-            blocks.append(CmsShortcodeInstance(
-                page=page, template=layout.footer_template, uid=uuid4().hex, position=9999
-            ))
-        if blocks:
-            CmsShortcodeInstance.objects.bulk_create(blocks)
+    def get_queryset(self):
+        qs = super().get_queryset()
+        limit = self.request.query_params.get('limit')
+        if limit and limit.isdigit():
+            qs = qs[: int(limit)]
+        return qs
+
+    def get_serializer_class(self):
+        if self.action == 'latest':
+            return PageCardSerializer
+        return super().get_serializer_class()
+
+    @action(detail=False, methods=['get'], url_path='latest', permission_classes=[AllowAny])
+    def latest(self, request):
+        cat_id = request.query_params.get('category_id')
+        if not cat_id:
+            return Response({'detail': 'category_id обязателен'}, status=400)
+
+        limit   = min(int(request.query_params.get('limit', 6)), 20)
+        tag_ids = [int(t) for t in request.query_params.getlist('tags') if t.isdigit()]
+
+        # базовый запрос + prefetch для тегов (N+1 fix)
+        qs = (
+            CmsPage.objects
+            .filter(category_id=cat_id)
+            .prefetch_related('tags')
+        )
+
+        if tag_ids:
+            qs = (
+                qs.filter(tags__id__in=tag_ids)
+                .annotate(matched_tags=Count('tags',
+                                                filter=Q(tags__id__in=tag_ids),
+                                                distinct=True))
+                .order_by('-matched_tags', '-date_of_creation')
+            )
+        else:
+            qs = qs.order_by('-date_of_creation')
+
+        qs = qs[:limit]
+
+        ser = PageCardSerializer(qs, many=True, context={'request': request})
+        return Response(ser.data)
+
 
 class PageByFullPathView(APIView):
     permission_classes = [AllowAny]
